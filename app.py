@@ -1,19 +1,20 @@
 import streamlit as st
 import numpy as np
-import plotly.graph_objects as px
 import plotly.graph_objects as go
 import matplotlib.pyplot as plt
 import time
 
-# 페이지 기본 설정
+# ==========================================
+# 1. 페이지 기본 설정 및 사용자 정의 CSS
+# ==========================================
 st.set_page_config(
-    page_title="지구 다이나모 이론 시뮬레이터",
+    page_title="지구 다이나모 이론 시뮬레이터 Pro",
     page_icon="🌍",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# 사용자 정의 CSS 스타일링 (모바일 대응 및 가독성 향상)
+# 다크 모드 UI 최적화 및 스타일링
 st.markdown("""
 <style>
     .main {
@@ -43,21 +44,25 @@ st.markdown("""
         border-radius: 5px;
         padding: 0.5em 1em;
         font-weight: bold;
+        width: 100%;
     }
 </style>
 """, unsafe_allow_html=True)
 
-# App Title
-st.title("🌍 지구 다이나모 이론 (Geodynamo Theory) 시뮬레이터")
+# 애플리케이션 타이틀 정의
+st.title("🌍 지구 다이나모 이론 (Geodynamo Theory) 시뮬레이터 Pro")
 st.subheader("지구 내부의 유체 운동이 어떻게 거대한 우주적 자석을 만드는가?")
+st.markdown("---")
 
-# 사이드바 설정 (실시간 변수 조정)
-st.sidebar.header("🛠️ 다이나모 시뮬레이션 매개변수")
+# ==========================================
+# 2. 사이드바 제어 패널 (통합 물리 파라미터 제어)
+# ==========================================
+st.sidebar.header("⚙️ 다이나모 매개변수 제어")
 st.sidebar.markdown("이 변수들이 지구 외핵 내의 발전기(Dynamo) 작용을 결정합니다.")
 
 alpha_strength = st.sidebar.slider(
     "알파(α) 효과 강도 (Helicity)", 
-    min_value=0.0, max_value=5.0, value=2.0, step=0.1,
+    min_value=0.0, max_value=5.0, value=2.5, step=0.1,
     help="외핵 유체의 대류와 코리올리 효과로 인해 자기력선이 꼬이면서 폴로이달 자기장을 생성하는 효율입니다."
 )
 
@@ -69,24 +74,93 @@ omega_strength = st.sidebar.slider(
 
 magnetic_diffusivity = st.sidebar.slider(
     "자기 확산도 (Magnetic Diffusivity, η)", 
-    min_value=0.1, max_value=3.0, value=1.0, step=0.1,
-    help="전도성 유체 내에서 자기장이 소멸하고 흩어지는 비율입니다. 값이 너무 크면 다이나모가 유지되지 않고 붕괴합니다."
+    min_value=0.1, max_value=3.0, value=0.4, step=0.1,
+    help="전도성 유체 내에서 자기장이 소멸하고 흩어지는 저항성 분산 비율입니다. 값이 너무 크면 다이나모가 붕괴합니다."
 )
 
-steps = st.sidebar.slider("시뮬레이션 시간 단계 (Steps)", min_value=50, max_value=300, value=150, step=10)
+st.sidebar.markdown("---")
+st.sidebar.header("🎬 시뮬레이션 환경 제어")
+grid_size = st.sidebar.slider("그리드 해상도 (Grid)", 20, 50, 40, 5)
+max_steps = st.sidebar.slider("최대 시뮬레이션 스텝 (Max Steps)", min_value=100, max_value=1000, value=500, step=50)
+dt = 0.005  # 수치적 안정성을 보장하는 유한차분 타임스텝
 
-# 메인 탭 구조 설정
-tab1, tab2, tab3 = st.tabs(["📖 다이나모 이론 학습", "📊 실시간 다이나모 시뮬레이션", "🌐 3D 지구 자기력선 시각화"])
+# 애니메이션 플레이 상태 변수 제어
+if "running" not in st.session_state:
+    st.session_state.running = False
+
+c1, c2 = st.sidebar.columns(2)
+with c1:
+    if st.button("▶️ 시뮬레이션 시작"):
+        st.session_state.running = True
+with c2:
+    if st.button("⏸️ 일시정지"):
+        st.session_state.running = False
+
+reset_btn = st.sidebar.button("🔄 시뮬레이션 초기화")
+
+# ==========================================
+# 3. 데이터 및 경계 조건 세션 상태 초기화
+# ==========================================
+if "step" not in st.session_state or reset_btn or "X" not in st.session_state or st.session_state.X.shape[0] != grid_size:
+    st.session_state.step = 0
+    x_coord = np.linspace(-2, 2, grid_size)
+    y_coord = np.linspace(-2, 2, grid_size)
+    st.session_state.X, st.session_state.Y = np.meshgrid(x_coord, y_coord)
+    
+    # 초기 조건: 지구 중심 쌍극자를 모사하는 평면 가우시안 폴로이달 자기장 수치 대입
+    st.session_state.Bp = np.exp(-(st.session_state.X**2 + st.session_state.Y**2))
+    st.session_state.Bt = np.zeros_like(st.session_state.X)
+    
+    # 시계열 에너지 히스토리 저장 배열 초기화
+    st.session_state.history_time = []
+    st.session_state.history_Bp_energy = []
+    st.session_state.history_Bt_energy = []
+    st.session_state.running = False
+    if reset_btn:
+        st.rerun()
+
+# ==========================================
+# 4. 수치해석 핵심 연산 엔진 (2D 유한차분법 Solver)
+# ==========================================
+def compute_next_step(Bp, Bt, alpha, omega, diffusivity, timestep):
+    """
+    주기적 경계 조건을 적용한 2차원 알파-오메가 다이나모 방정식 연산 솔버
+    """
+    lap_Bp = (np.roll(Bp, -1, axis=0) + np.roll(Bp, 1, axis=0) +
+              np.roll(Bp, -1, axis=1) + np.roll(Bp, 1, axis=1) - 4 * Bp)
+    
+    lap_Bt = (np.roll(Bt, -1, axis=0) + np.roll(Bt, 1, axis=0) +
+              np.roll(Bt, -1, axis=1) + np.roll(Bt, 1, axis=1) - 4 * Bt)
+    
+    # 차동 회전에 의한 전단 응력 (x축 방향 공간 1차 미분)
+    dBp_dx = (np.roll(Bp, -1, axis=1) - np.roll(Bp, 1, axis=1)) / 2.0
+    
+    # 유동 역반응에 의한 무한 발산 제어용 포화 계수
+    saturation = 1.0 / (1.0 + 0.1 * Bt**2)
+    
+    next_Bt = Bt + timestep * (omega * dBp_dx + diffusivity * lap_Bt)
+    next_Bp = Bp + timestep * (alpha * Bt * saturation + diffusivity * lap_Bp)
+    
+    return np.clip(next_Bp, -5.0, 5.0), np.clip(next_Bt, -5.0, 5.0)
+
+# ==========================================
+# 5. 메인 탭 레이아웃 구성
+# ==========================================
+tab1, tab2, tab3, tab4 = st.tabs([
+    "📖 다이나모 이론 학습", 
+    "📊 실시간 2D 수치 시뮬레이션", 
+    "🌐 3D 지구 자기력선 시각화",
+    "🌪️ 핵심 메커니즘 개별 실험실"
+])
 
 # -------------------------------------------------------------------------
 # TAB 1: 다이나모 이론 학습
 # -------------------------------------------------------------------------
 with tab1:
     st.header("🧠 다이나모 이론 (Geodynamo Theory) 이란?")
+    col_theory_l, col_theory_r = st.columns([3, 2])
     
-    col1, col2 = st.columns([3, 2])
-    
-    with col1:
+    with col_theory_l:
         st.markdown("""
         지구의 자기장은 단순히 자성을 띤 거대한 광물이 안에 들어있기 때문이 아닙니다. 지구 내부 깊은 곳(외핵)은 **섭씨 4,000도가 넘는 액체 금속(철과 니켈)**으로 가득 차 있으며, 이 액체 금속이 끊임없이 흐르며 전류를 만들어내고, 그 전류가 다시 자기장을 만드는 **'자가 발전기(Self-exciting Dynamo)'** 구조를 이루고 있습니다. 이를 **다이나모 이론**이라고 합니다.
         
@@ -96,13 +170,11 @@ with tab1:
         3. **회전력**: 지구 자전으로 인해 유체 흐름을 비틀어주는 **코리올리 힘(Coriolis force)**.
         """)
     
-    with col2:
-        # 개념 전달을 위한 플레이스홀더 성격의 시각 프레임 구현
+    with col_theory_r:
         st.info("💡 **핵심 직관**: 전기 모터에 전기를 넣으면 회전하듯, 반대로 유체의 회전 운동을 자기장 영역에 넣으면 전기가 만들어지고 자기장이 증폭됩니다.")
 
     st.markdown("---")
     st.subheader("🔄 다이나모의 두 가지 기둥: 폴로이달과 토로이달 성분")
-    
     col_pol, col_tor = st.columns(2)
     
     with col_pol:
@@ -120,14 +192,13 @@ with tab1:
         """)
 
     st.markdown("---")
-    st.subheader("⚙️ 순환 메커니즘: $\alpha$ 효과와 $\Omega$ 효과")
-    
+    st.subheader("⚙️ 순환 메커니즘: $\alpha$ 효과와 $\Omega$ 효과 공식")
     col_alpha, col_omega = st.columns(2)
     
     with col_omega:
         st.markdown("### 🌀 오메가 효과 ($\Omega$-Effect) : $B_p \\rightarrow B_t$")
         st.markdown("""
-        * **원리**: 지구 자전 시 적도 부근과 극 부근의 회전 속도가 다른 **차등 회전(Differential Rotation)**이 발생합니다.
+        * **원리**: 지구 자전 시 적도 부근과 극 부근의 회전 속도가 다른 **차동 회전(Differential Rotation)**이 발생합니다.
         * **현상**: 이 속도 차이로 인해 남북 방향의 폴로이달 자기선이 동서 방향으로 팽팽하게 감기면서 강한 **토로이달 자기장**으로 변환됩니다.
         """)
         st.latex(r"\frac{\partial B_t}{\partial t} \approx \Delta \Omega \cdot B_p + \eta \nabla^2 B_t")
@@ -140,227 +211,252 @@ with tab1:
         """)
         st.latex(r"\frac{\partial B_p}{\partial t} \approx \alpha \cdot B_t + \eta \nabla^2 B_p")
 
-    st.success("✅ **결론**: 폴로이달 자기장이 $\Omega$ 효과로 토로이달이 되고, 토로이달 자기장이 $\alpha$ 효과로 다시 폴로이달이 되는 이 순환 고리($\alpha\Omega$-Dynamo) 덕분에 지구 자기장은 수십억 년 동안 꺼지지 않고 유지될 수 있습니다.")
+    st.success("✅ **결론**: 폴로이달 자기장이 $\\Omega$ 효과로 토로이달이 되고, 토로이달 자기장이 $\\alpha$ 효과로 다시 폴로이달이 되는 이 순환 고리($\\alpha\\Omega$-Dynamo) 덕분에 지구 자기장은 수십억 년 동안 꺼지지 않고 유지될 수 있습니다.")
 
 # -------------------------------------------------------------------------
-# TAB 2: 실시간 다이나모 시뮬레이션
+# TAB 2: 실시간 2D 수치 시뮬레이션
 # -------------------------------------------------------------------------
 with tab2:
-    st.header("📊 $\alpha\Omega$-다이나모 수치 시뮬레이션")
-    st.markdown("""
-    지구 외핵의 자전축 반경 방향을 단순화한 1차원 공간 격자상에서 평균장 다이나모 방정식(Mean-field Dynamo Equations)을 풀이합니다.
-    조정하신 **알파 강도, 오메가 강도, 자기 확산도**에 따라 다이나모가 지속되어 진동하는지, 기하급수적으로 폭발하는지, 혹은 확산되어 사라지는지 실시간으로 관찰해 보세요.
-    """)
-
-    # --- 수치 계산 엔진 ---
-    # 파라미터 기반 물리 행렬 정의 및 순방향 시간 차분법(Euler-Forward FTCS) 해석
-    N = 50  # 공간 격자 크기
-    dx = 1.0 / (N - 1)
-    dt = 0.001  # 안정성 조건을 고려한 시간 간격
+    st.header("📊 $\alpha\Omega$-다이나모 2D 고해상도 시뮬레이션")
+    st.markdown("사이드바의 제어 패널을 통해 유체 유도 계수를 변경하고 실시간 물리 연산 흐름을 관찰하세요.")
     
-    # 초기 상태 정의 (미세한 섭동 자기장)
-    Bp = np.sin(np.pi * np.linspace(0, 1, N)) * 0.1
-    Bt = np.zeros(N)
+    status_box = st.empty()
     
-    # 시간 변화 기록용 배열
-    history_time = []
-    history_Bp_energy = []
-    history_Bt_energy = []
-    
-    # 수치 안정성 체크 (CFL 조건 간소화 반영)
-    stability_factor = magnetic_diffusivity * dt / (dx**2)
-    if stability_factor > 0.5:
-        st.warning(f"⚠️ 경고: 현재 설정은 자기 확산 조건에 비해 시간 간격이 큽니다 (안정성 인자: {stability_factor:.2f} > 0.5). 수치적 노이즈가 발생할 수 있습니다.")
-
-    # 발전기 시뮬레이션 루프 실행
-    for t_step in range(steps):
-        new_Bp = np.copy(Bp)
-        new_Bt = np.copy(Bt)
+    # 2D 평면 가우시안 윤곽선 그래프 플레이스홀더
+    col_graph1, col_graph2 = st.columns(2)
+    with col_graph1:
+        st.subheader("🌐 주 자기장: 폴로이달 성분 ($B_p$)")
+        graph_p = st.empty()
+    with col_graph2:
+        st.subheader("🌀 내부 자기장: 토로이달 성분 ($B_t$)")
+        graph_t = st.empty()
         
-        # 내부 격자점 업데이트 (경계 조건은 완전 전도체 0 가정)
-        for i in range(1, N-1):
-            # 2차 도함수 (확산 항)
-            d2Bp = (Bp[i+1] - 2*Bp[i] + Bp[i-1]) / (dx**2)
-            d2Bt = (Bt[i+1] - 2*Bt[i] + Bt[i-1]) / (dx**2)
-            
-            # 알파 효과 및 오메가 효과 물리 방정식 대입
-            # Bp_dot = alpha * Bt + eta * d2Bp
-            # Bt_dot = omega * dBp/dx + eta * d2Bt
-            dBp_dx = (Bp[i+1] - Bp[i-1]) / (2*dx)
-            
-            new_Bp[i] = Bp[i] + dt * (alpha_strength * Bt[i] + magnetic_diffusivity * d2Bp)
-            new_Bt[i] = Bt[i] + dt * (omega_strength * dBp_dx + magnetic_diffusivity * d2Bt)
-            
-        Bp = new_Bp
-        Bt = new_Bt
-        
-        # 총 에너지(L2 Norm 제곱) 기록
-        history_time.append(t_step * dt)
-        history_Bp_energy.append(np.sum(Bp**2))
-        history_Bt_energy.append(np.sum(Bt**2))
+    # 1D 프로파일 및 에너지 라인 차트 플레이스홀더
+    st.markdown("---")
+    col_chart1, col_chart2 = st.columns(2)
+    with col_chart1:
+        st.subheader("📈 시간 흐름에 따른 자기장 에너지 변화 (Plotly)")
+        chart_energy = st.empty()
+    with col_chart2:
+        st.subheader("📐 핵 반경 방향에 따른 최종 자기장 분포 (Plotly)")
+        chart_profile = st.empty()
 
-    # --- 결과 시각화 ---
-    col_fig1, col_fig2 = st.columns(2)
-    
-    with col_fig1:
-        st.subheader("📈 시간 흐름에 따른 자기장 에너지 변화")
-        fig_energy = go.Figure()
-        fig_energy.add_trace(go.Scatter(x=history_time, y=history_Bp_energy, name="폴로이달 에너지 (Bp^2)", line=dict(color='#ff4b4b', width=3)))
-        fig_energy.add_trace(go.Scatter(x=history_time, y=history_Bt_energy, name="토로이달 에너지 (Bt^2)", line=dict(color='#00f0ff', width=3)))
-        fig_energy.update_layout(
-            template="plotly_dark",
-            xaxis_title="무차원 시간 (Time)",
-            yaxis_title="자기장 에너지 (Energy)",
-            legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01),
-            margin=dict(l=20, r=20, t=30, b=20)
-        )
-        st.plotly_chart(fig_energy, use_container_width=True)
-        
-    with col_fig2:
-        st.subheader("📐 핵 반경 방향에 따른 최종 자기장 분포")
-        # 현재 마지막 스텝의 Bp, Bt 프로파일
-        fig_profile = go.Figure()
-        r_grid = np.linspace(0.3, 1.0, N) # 외핵 안쪽(0.3)부터 외핵 바깥 경계(1.0)
-        fig_profile.add_trace(go.Scatter(x=r_grid, y=Bp, name="폴로이달 성분 (Bp)", line=dict(color='#ff4b4b', dash='dash')))
-        fig_profile.add_trace(go.Scatter(x=r_grid, y=Bt, name="토로이달 성분 (Bt)", line=dict(color='#00f0ff')))
-        fig_profile.update_layout(
-            template="plotly_dark",
-            xaxis_title="지구 반경 (외핵 내 규격화 반경 r)",
-            yaxis_title="자기장 세기 (Field Strength)",
-            legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01),
-            margin=dict(l=20, r=20, t=30, b=20)
-        )
-        st.plotly_chart(fig_profile, use_container_width=True)
-
-    # 물리적 상태 해석 피드백 제공
-    st.markdown("### 🔍 시뮬레이션 결과 물리 해석")
-    final_bp_energy = history_Bp_energy[-1]
-    final_bt_energy = history_Bt_energy[-1]
-    
-    if final_bp_energy < 0.001:
-        st.error("📉 **다이나모 소멸 (Decay)**: 자기 확산도($\\eta$)가 생산력($\\alpha \\times \\Omega$)보다 강해 자기장이 유지되지 못하고 소멸했습니다. 지구 자기장이 꺼진 상태입니다!")
-    elif final_bp_energy > 10.0:
-        st.warning("📈 **폭발적 발산 (Unbounded Growth)**: 실제 지구는 에너지가 무한히 증가할 때 유동 역반응(Lorentz force)이 작용해 포화(Saturation)가 일어나지만, 현재 선형 모델에서는 에너지가 제어할 수 없이 성장하고 있습니다.")
+    # 애니메이션 실행 분기점
+    if st.session_state.running:
+        while st.session_state.running and st.session_state.step < max_steps:
+            st.session_state.Bp, st.session_state.Bt = compute_next_step(
+                st.session_state.Bp, st.session_state.Bt,
+                alpha_coeff, omega_coeff, eta, dt
+            )
+            st.session_state.step += 1
+            
+            # 실시간 에너지 저장
+            st.session_state.history_time.append(st.session_state.step * dt)
+            st.session_state.history_Bp_energy.append(np.sum(st.session_state.Bp**2))
+            st.session_state.history_Bt_energy.append(np.sum(st.session_state.Bt**2))
+            
+            # --- 1) 2D 폴로이달 윤곽선 시각화 ---
+            fig_p, ax_p = plt.subplots(figsize=(6, 4.5))
+            contour_p = ax_p.contourf(st.session_state.X, st.session_state.Y, st.session_state.Bp, cmap="RdBu_r", levels=25, vmin=-2, vmax=2)
+            fig_p.colorbar(contour_p, ax=ax_p)
+            ax_p.set_title(f"Poloidal Field | Step: {st.session_state.step}")
+            graph_p.pyplot(fig_p)
+            
+            # --- 2) 2D 토로이달 윤곽선 시각화 ---
+            fig_t, ax_t = plt.subplots(figsize=(6, 4.5))
+            contour_t = ax_t.contourf(st.session_state.X, st.session_state.Y, st.session_state.Bt, cmap="viridis", levels=25, vmin=-4, vmax=4)
+            fig_t.colorbar(contour_t, ax=ax_t)
+            ax_t.set_title(f"Toroidal Field | Step: {st.session_state.step}")
+            graph_t.pyplot(fig_t)
+            
+            # --- 3) Plotly 실시간 에너지 시계열 그리기 ---
+            fig_energy = go.Figure()
+            fig_energy.add_trace(go.Scatter(x=st.session_state.history_time, y=st.session_state.history_Bp_energy, name="폴로이달 에너지 ($B_p^2$)", line=dict(color='#ff4b4b', width=2.5)))
+            fig_energy.add_trace(go.Scatter(x=st.session_state.history_time, y=st.session_state.history_Bt_energy, name="토로이달 에너지 ($B_t^2$)", line=dict(color='#00f0ff', width=2.5)))
+            fig_energy.update_layout(template="plotly_dark", xaxis_title="무차원 시간 (Time)", yaxis_title="자기장 에너지", margin=dict(l=20, r=20, t=20, b=20))
+            chart_energy.plotly_chart(fig_energy, use_container_width=True)
+            
+            # --- 4) Plotly 실시간 반경방향 단면 프로파일 그리기 ---
+            center_idx = grid_size // 2
+            r_grid = np.linspace(0.3, 1.0, grid_size - center_idx)
+            fig_profile = go.Figure()
+            fig_profile.add_trace(go.Scatter(x=r_grid, y=st.session_state.Bp[center_idx, center_idx:], name="폴로이달 성분 ($B_p$)", line=dict(color='#ff4b4b', dash='dash')))
+            fig_profile.add_trace(go.Scatter(x=r_grid, y=st.session_state.Bt[center_idx, center_idx:], name="토로이달 성분 ($B_t$)", line=dict(color='#00f0ff')))
+            fig_profile.update_layout(template="plotly_dark", xaxis_title="외핵 내 규격화 반경 (r)", yaxis_title="자기장 세기", margin=dict(l=20, r=20, t=20, b=20))
+            chart_profile.plotly_chart(fig_profile, use_container_width=True)
+            
+            plt.close('all')
+            status_box.info(f"🧬 다이나모 상호 순환 연산 진행 중... (Step: {st.session_state.step}/{max_steps})")
+            time.sleep(0.01)
+            
+        if st.session_state.step >= max_steps:
+            st.session_state.running = False
+            st.rerun()
     else:
-        st.success("🔄 **지속 가능한 진동형 다이나모 (Self-Sustaining Dynamo)**: $\\alpha$ 효과와 $\\Omega$ 효과가 확산과 절묘한 조화를 이루어 안정한 주기적 상호 변환 상태를 이룹니다! 지구 자기장이 안정적으로 켜져 있습니다.")
+        # 정지 상태일 때 프레임 고정 출력
+        fig_p, ax_p = plt.subplots(figsize=(6, 4.5))
+        contour_p = ax_p.contourf(st.session_state.X, st.session_state.Y, st.session_state.Bp, cmap="RdBu_r", levels=25, vmin=-2, vmax=2)
+        fig_p.colorbar(contour_p, ax=ax_p)
+        ax_p.set_title("Poloidal Field - Standing State")
+        graph_p.pyplot(fig_p)
+        
+        fig_t, ax_t = plt.subplots(figsize=(6, 4.5))
+        contour_t = ax_t.contourf(st.session_state.X, st.session_state.Y, st.session_state.Bt, cmap="viridis", levels=25, vmin=-4, vmax=4)
+        fig_t.colorbar(contour_t, ax=ax_t)
+        ax_t.set_title("Toroidal Field - Standing State")
+        graph_t.pyplot(fig_t)
+        
+        fig_energy = go.Figure()
+        fig_energy.add_trace(go.Scatter(x=st.session_state.history_time, y=st.session_state.history_Bp_energy, name="폴로이달 에너지 ($B_p^2$)", line=dict(color='#ff4b4b', width=2.5)))
+        fig_energy.add_trace(go.Scatter(x=st.session_state.history_time, y=st.session_state.history_Bt_energy, name="토로이달 에너지 ($B_t^2$)", line=dict(color='#00f0ff', width=2.5)))
+        fig_energy.update_layout(template="plotly_dark", xaxis_title="무차원 시간 (Time)", yaxis_title="자기장 에너지", margin=dict(l=20, r=20, t=20, b=20))
+        chart_energy.plotly_chart(fig_energy, use_container_width=True)
+        
+        center_idx = grid_size // 2
+        r_grid = np.linspace(0.3, 1.0, grid_size - center_idx)
+        fig_profile = go.Figure()
+        fig_profile.add_trace(go.Scatter(x=r_grid, y=st.session_state.Bp[center_idx, center_idx:], name="폴로이달 성분 ($B_p$)", line=dict(color='#ff4b4b', dash='dash')))
+        fig_profile.add_trace(go.Scatter(x=r_grid, y=st.session_state.Bt[center_idx, center_idx:], name="토로이달 성분 ($B_t$)", line=dict(color='#00f0ff')))
+        fig_profile.update_layout(template="plotly_dark", xaxis_title="외핵 내 규격화 반경 (r)", yaxis_title="자기장 세기", margin=dict(l=20, r=20, t=20, b=20))
+        chart_profile.plotly_chart(fig_profile, use_container_width=True)
+        
+        plt.close('all')
+        
+        # 물리 상태 진단 해석 피드백 제공
+        if len(st.session_state.history_Bp_energy) > 0:
+            final_eng = st.session_state.history_Bp_energy[-1]
+            if final_eng < 0.01:
+                st.error("📉 **다이나모 소멸 (Decay)**: 자기 확산도가 생산력보다 강해 자기장이 유지되지 못하고 소멸했습니다.")
+            elif final_eng > 15.0:
+                st.warning("📈 **폭발적 발산 (Unbounded Growth)**: 선형 수치 방정식 특성상 한계 임계치를 초과하여 에러 수치에 가깝게 무한 성장 중입니다.")
+            else:
+                st.success("🔄 **지속 가능한 진동형 다이나모 (Self-Sustaining)**: 알파와 오메가 효과가 확산과 평형을 이루어 스스로 자기장을 유지합니다.")
+        else:
+            status_box.warning(f"⏸️ 연산이 대기 중입니다. (현재 연산 완료 단계: Step {st.session_state.step})")
 
 # -------------------------------------------------------------------------
-# TAB 3: 3D 지구 자기력선 시각화
+# TAB 3: 3D 지구 자기력선 시각화룸
 # -------------------------------------------------------------------------
 with tab3:
-    st.header("🌐 지구 주변의 3차원 자기력선 뷰")
-    st.markdown("""
-    외핵에서 생성된 폴로이달 자기장은 행성 외부로 탈출하여 우주로 뻗어나가는 거대한 쌍극자(Dipole) 자기장을 형성합니다.
-    아래 3D 플롯은 시뮬레이션에서 생성된 최종 **폴로이달 성분의 강도**와 연계된 지구 주변의 가상 자기력선 분포입니다.
-    *(마우스로 회전, 줌인/아웃이 가능하며 모바일 기기에서는 손가락 터치 제스처로 조작할 수 있습니다)*
-    """)
-
-    # 3D 자기력선(Dipole Field Line) 수치 생성 함수
-    def get_dipole_lines(strength, num_lines=28, num_points=60):
-        # 쌍극자 공식: r = R * sin^2(theta)
+    st.header("🌐 3차원 지구 모형과 Plotly 입체 우주 자기력선")
+    st.markdown("현재 폴로이달 자기장의 연산 강도를 기반으로 도출된 3D 다이폴 구조입니다. 마우스 드래그로 회전 및 확대 조작이 가능합니다.")
+    
+    # 3D 쌍극자 궤적 생성 함수 정의
+    def get_dipole_lines(strength, num_lines=24, num_points=50):
         lines = []
-        # 지구 자기장 세기가 아주 낮을 경우 최소 강도 고정
-        effective_strength = max(strength, 0.1) * 2.5
+        effective_scale = 0.8 + np.clip(strength * 1.2, 0.0, 2.0)
+        longitudes = np.linspace(0, 2 * np.pi, num_lines, endpoint=False)
+        loop_sizes = [0.8, 1.4, 2.0, 2.7]
         
-        # 일정한 구면 위상 분할
-        for i in range(num_lines):
-            # 동서 평면 각도 (경도)
-            phi = (i / num_lines) * 2 * np.pi
-            
-            # 각 라인마다 다른 최대 고리 반경을 가짐
-            R_max = (0.8 + 1.5 * np.random.rand()) * (1.0 + np.sqrt(effective_strength) * 0.5)
-            
-            theta = np.linspace(0.05, np.pi - 0.05, num_points)
-            r = R_max * (np.sin(theta) ** 2)
-            
-            # 데카르트 좌표계 변환
-            x = r * np.sin(theta) * np.cos(phi)
-            y = r * np.sin(theta) * np.sin(phi)
-            z = r * np.cos(theta)
-            
-            lines.append((x, y, z))
+        for lon in longitudes:
+            for base_r in loop_sizes:
+                r_max = base_r * effective_scale
+                min_val = np.clip(0.5 / r_max, 0, 1)
+                theta_min = np.arcsin(np.sqrt(min_val))
+                
+                theta = np.linspace(theta_min, np.pi - theta_min, num_points)
+                r = r_max * (np.sin(theta) ** 2)
+                
+                x = r * np.sin(theta) * np.cos(lon)
+                y = r * np.sin(theta) * np.sin(lon)
+                z = r * np.cos(theta)
+                lines.append((x, y, z))
         return lines
 
-    # 최종 폴로이달 값의 세기 연동
-    current_strength = np.max(np.abs(Bp)) if len(Bp) > 0 else 1.0
+    current_strength = np.mean(np.abs(st.session_state.Bp))
     field_lines = get_dipole_lines(current_strength)
-
-    # Plotly 3D 그래픽 설정
+    
     fig_3d = go.Figure()
-
-    # 1. 지구 표면 구체(Sphere) 생성
-    u = np.linspace(0, 2 * np.pi, 30)
-    v = np.linspace(0, np.pi, 30)
-    # 지구의 반지름 규격 r = 1
-    xs = 1.0 * np.outer(np.cos(u), np.sin(v))
-    ys = 1.0 * np.outer(np.sin(u), np.sin(v))
-    zs = 1.0 * np.outer(np.ones(np.size(u)), np.cos(v))
-
-    # 지구 시각화
+    
+    # 투명한 지구 표면 구체(Sphere) 드로잉
+    u_s = np.linspace(0, 2 * np.pi, 30)
+    v_s = np.linspace(0, np.pi, 30)
+    xs = 0.5 * np.outer(np.cos(u_s), np.sin(v_s))
+    ys = 0.5 * np.outer(np.sin(u_s), np.sin(v_s))
+    zs = 0.5 * np.outer(np.ones(np.size(u_s)), np.cos(v_s))
+    
     fig_3d.add_trace(go.Surface(
         x=xs, y=ys, z=zs,
         colorscale=[[0, '#0d2b45'], [0.5, '#203c56'], [1, '#546a7b']],
-        showscale=False,
-        name="지구 (Earth)",
-        opacity=0.9,
-        hoverinfo='none'
+        showscale=False, opacity=0.4, name="지구 표면"
     ))
-
-    # 2. 3D 자기력선 추가
-    for idx, (x, y, z) in enumerate(field_lines):
-        # 흐름 방향을 보여주기 위해 선에 점차적으로 색상 부여 (남극에서 출발해 북극으로 복귀하는 느낌)
+    
+    # 내부 쌍극자 막대자석 코어 장치 오버레이
+    fig_3d.add_trace(go.Scatter3d(x=[0, 0], y=[0, 0], z=[0, 0.7], mode='lines', line=dict(color='red', width=7), name="Internal Core (N)"))
+    fig_3d.add_trace(go.Scatter3d(x=[0, 0], y=[0, 0], z=[-0.7, 0], mode='lines', line=dict(color='blue', width=7), name="Internal Core (S)"))
+    
+    # 계산된 우주 자기선 고리 맵핑
+    for idx, (x_l, y_l, z_l) in enumerate(field_lines):
         fig_3d.add_trace(go.Scatter3d(
-            x=x, y=y, z=z,
-            mode='lines',
-            line=dict(
-                color='rgba(135, 206, 250, 0.7)',
-                width=3
-            ),
-            name=f"자기력선 {idx+1}" if idx == 0 else "",
-            showlegend=True if idx == 0 else False,
-            hoverinfo='none'
+            x=x_l, y=y_l, z=z_l, mode='lines',
+            line=dict(color='rgba(0, 240, 255, 0.6)', width=2.5),
+            showlegend=True if idx == 0 else False, name="지구 자기력선 보호막"
         ))
-
-    # 자전축 방향 벡터 표시
-    fig_3d.add_trace(go.Scatter3d(
-        x=[0, 0], y=[0, 0], z=[-2.5, 2.5],
-        mode='lines+text',
-        line=dict(color='white', width=4, dash='dash'),
-        name="자전축 (Rotation Axis)",
-        text=["", "지구 자전축(N)"],
-        textposition="top center"
-    ))
-
-    # Layout 세부 튜닝
+        
     fig_3d.update_layout(
-        template="plotly_dark",
-        margin=dict(l=0, r=0, b=0, t=0),
+        template="plotly_dark", margin=dict(l=0, r=0, b=0, t=0),
         scene=dict(
-            xaxis=dict(title='X', showbackground=False, visible=False),
-            yaxis=dict(title='Y', showbackground=False, visible=False),
-            zaxis=dict(title='Z', showbackground=False, visible=False),
-            aspectmode='data',
-            camera=dict(
-                eye=dict(x=2.0, y=2.0, z=1.5) # 비스듬하게 지구를 내려다보는 구도
-            )
-        ),
-        height=600
+            xaxis=dict(visible=False), yaxis=dict(visible=False), zaxis=dict(visible=False),
+            aspectmode='data', camera=dict(eye=dict(x=1.8, y=1.8, z=1.2))
+        ), height=600
     )
-
-    col_3d_left, col_3d_right = st.columns([3, 1])
-    with col_3d_left:
+    
+    col_3d_l, col_3d_r = st.columns([3, 1])
+    with col_3d_l:
         st.plotly_chart(fig_3d, use_container_width=True)
-    with col_3d_right:
-        st.markdown("### 💡 시각화 상세 제어")
+    with col_3d_r:
+        st.markdown("### 💡 3D 자기장 인터랙티브 피드백")
         st.markdown(f"**현재 다이나모 유도강도 지수**: `{current_strength:.4f}`")
         st.markdown("""
-        * **자기장의 팽창**: 사이드바에서 **알파 강도**나 **오메가 강도**를 키우면 외핵 내부 에너지가 증가하여 외부에 펼쳐지는 자기력선의 규모가 눈에 띄게 우람해집니다.
-        * **자기장의 소멸**: 반대로 **자기 확산도($\\eta$)**를 대폭 올린 채로 시뮬레이션을 다시 돌려보세요. 외부로 뻗어나가는 파란색 자기력선의 밀도와 부피가 축소될 것입니다.
+        * **자기장의 팽창**: 수치 시뮬레이션 탭에서 연산을 재개하여 에너지가 커지면, 이곳 3D 궤적 내 하늘색 보호막의 볼륨감이 실시간 비례 연동하여 커집니다.
+        * **자석 유도축 고정**: 구체 상하단의 굵은 적색/청색 축선은 행성 내핵-외핵 중심의 쌍극 발전 극성을 상징합니다.
         """)
-        
-        # 사용자를 위한 시뮬레이션 초기화 팁 안내
-        st.info("💡 **팁**: 매개변수를 조절한 뒤 시뮬레이션 결과가 즉시 반영되도록 실시간 시뮬레이션 탭과 연계되어 작동합니다.")
 
-# 푸터 영역 정의
+# -------------------------------------------------------------------------
+# TAB 4: 핵심 메커니즘 개별 실험실
+# -------------------------------------------------------------------------
+with tab4:
+    st.header("🌪️ 다이나모 핵심 핵심 물리 변형 분리 학습실")
+    st.markdown("통합 다이나모 수치 해석과 별개로, 유체의 미시적 거동이 자기선 지오메트리를 어떻게 꼬아놓는지 개별 법칙만 분리해 실험합니다.")
+    
+    col_lab_l, col_lab_r = st.columns([1, 2])
+    
+    with col_lab_l:
+        mech_type = st.radio(
+            "실험할 유체 변형 물리 작용",
+            ["오메가 효과 (차동 회전에 의한 수평 감김)", "알파 효과 (코리올리 회오리에 의한 수직 꼬임)"]
+        )
+        lab_distortion = st.slider("물리적 유체 왜곡 강도 (Distortion)", 0.0, 4.0, 2.0, 0.2)
+        
+    with col_lab_r:
+        g_res = 30
+        lx = np.linspace(-2, 2, g_res)
+        ly = np.linspace(-2, 2, g_res)
+        LX, LY = np.meshgrid(lx, ly)
+        LR = np.sqrt(LX**2 + LY**2)
+        
+        fig_lab, ax_lab = plt.subplots(figsize=(6, 4.5))
+        core_line = plt.Circle((0, 0), 1.0, color='gray', fill=False, linestyle='--', linewidth=1.5)
+        ax_lab.add_patch(core_line)
+        
+        if "오메가" in mech_type:
+            st.info("🌀 **오메가 효과 원리**: 자전 속도 구배(차동 회전)로 인해 원래 일직선이던 자력선 기둥이 수평 동서 방향으로 팽팽하게 실타래처럼 감기며 토로이달 자기장으로 증폭 변형됩니다.")
+            Ux = -LY * np.exp(-LR**2) * lab_distortion
+            Uy = 1.0 + LX * np.exp(-LR**2) * lab_distortion
+            ax_lab.streamplot(LX, LY, Ux, Uy, color='darkorange', density=1.1, linewidth=1.1)
+        else:
+            st.info("🌪️ **알파 효과 원리**: 회오리 치는 코리올리 열대류 유동이 수평 상태인 자기선을 수직 평면 루프로 꼬아 올리며 다시 남북 종축 방향의 폴로이달 극성을 재생산합니다.")
+            twist_cell = np.exp(-(LX**2 + LY**2) / 0.5)
+            Ux = 1.0 - LY * twist_cell * lab_distortion
+            Uy = LX * twist_cell * lab_distortion
+            ax_lab.streamplot(LX, LY, Ux, Uy, color='dodgerblue', density=1.1, linewidth=1.1)
+            
+        ax_lab.set_xlim(-2, 2); ax_lab.set_ylim(-2, 2)
+        ax_lab.set_aspect('equal')
+        ax_lab.grid(True, linestyle=':', alpha=0.5)
+        st.pyplot(fig_lab)
+        plt.close(fig_lab)
+
+# 웹 페이지 하단 푸터 영역
 st.markdown("---")
-st.markdown("<p style='text-align: center; color: gray;'>지구 다이나모 수치 시뮬레이션 | 물리 교육용 웹 애플리케이션</p>", unsafe_allow_html=True)
+st.markdown("<p style='text-align: center; color: gray;'>지구 다이나모 수치 시뮬레이션 | 물리 및 우주지구과학 교육용 웹 애플리케이션</p>", unsafe_allow_html=True)
