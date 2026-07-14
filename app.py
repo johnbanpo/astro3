@@ -86,11 +86,13 @@ def compute_next_step(Bp, Bt, alpha, omega, diffusivity, timestep):
     dBp_dx = (np.roll(Bp, -1, axis=1) - np.roll(Bp, 1, axis=1)) / 2.0
     
     # 차분 방정식을 통한 시간 전진 연산 (Euler Method)
+    # 로렌츠 힘 피드백에 의한 무한 발산 방지를 위해 탄탄한 포화 메커니즘을 상수로 제어
     saturation = 1.0 / (1.0 + 0.1 * Bt**2)
     
     next_Bt = Bt + timestep * (omega * dBp_dx + diffusivity * lap_Bt)
     next_Bp = Bp + timestep * (alpha * Bt * saturation + diffusivity * lap_Bp)
     
+    # 수치적 오버플로우로 인한 깨짐 방지 안전장치
     return np.clip(next_Bp, -5.0, 5.0), np.clip(next_Bt, -5.0, 5.0)
 
 # ==========================================
@@ -120,8 +122,8 @@ st.markdown("상단의 수치 연산 프레임과 실시간 연동되거나, 개
 col3, col4 = st.columns(2)
 
 with col3:
-    st.subheader("🌍 3차원 지구 모형과 공간 자기력선")
-    st.caption("현재 폴로이달 자기장(Bp)의 평균 강도를 반영하여 외부로 뿜어져 나오는 3D 자기력선을 시각화합니다.")
+    st.subheader("🌍 3차원 지구 모형과 우주 자기력선 보호막")
+    st.caption("실제 나침반 자석 원리에 기반한 대칭형 3D 자기력선 궤적입니다. 연산 강도에 따라 크기가 호흡하듯 변화합니다.")
     graph_3d = st.empty()
 
 with col4:
@@ -132,118 +134,58 @@ with col4:
     graph_mech = st.empty()
 
 
-# 3D 자기력선 렌더링 헬퍼 함수
+# 💡 [핵심 대개편] NASA 및 교육 도식을 참조한 직관적인 3D 자기력선 렌더링 함수
 def render_3d_magnetic_field(bp_intensity):
     fig = plt.figure(figsize=(6, 5.5))
     ax = fig.add_subplot(111, projection='3d')
     
-    # 3D 지구 구체 생성
-    u = np.linspace(0, 2 * np.pi, 20)
-    v = np.linspace(0, np.pi, 20)
-    x_earth = 0.4 * np.outer(np.cos(u), np.sin(v))
-    y_earth = 0.4 * np.outer(np.sin(u), np.sin(v))
-    z_earth = 0.4 * np.outer(np.ones(np.size(u)), np.cos(v))
-    ax.plot_surface(x_earth, y_earth, z_earth, color='royalblue', alpha=0.6, edgecolor='w', linewidth=0.2)
+    # 1. 3D 지구본 디자인 (반경 0.5로 정밀 제어, 투명도를 주어 입체감 부여)
+    u = np.linspace(0, 2 * np.pi, 25)
+    v = np.linspace(0, np.pi, 25)
+    x_earth = 0.5 * np.outer(np.cos(u), np.sin(v))
+    y_earth = 0.5 * np.outer(np.sin(u), np.sin(v))
+    z_earth = 0.5 * np.outer(np.ones(np.size(u)), np.cos(v))
+    ax.plot_surface(x_earth, y_earth, z_earth, color='dodgerblue', alpha=0.4, edgecolor='w', linewidth=0.1)
     
-    # 가우시안 다이폴 수식을 기반으로 3D 공간 자기력선 궤적 연산 (강도 연동)
-    scale = max(0.2, np.mean(np.abs(bp_intensity)))
-    theta = np.linspace(0, 2 * np.pi, 12)
-    for t in theta:
-        for r_max in np.linspace(0.6, 1.8, 4) * scale:
-            phi = np.linspace(-np.pi/2, np.pi/2, 30)
-            r = r_max * np.cos(phi)**2
-            x_line = r * np.cos(phi) * np.cos(t)
-            y_line = r * np.cos(phi) * np.sin(t)
-            z_line = r * np.sin(phi)
-            ax.plot(x_line, y_line, z_line, color='crimson', alpha=0.6, linewidth=1.0)
+    # 2. 지구 내부의 자석 축 막대기 표현 (N극: 빨강 / S극: 파랑)
+    ax.plot([0, 0], [0, 0], [0.5, 0.9], color='red', linewidth=4, label='Magnetic North')
+    ax.plot([0, 0], [0, 0], [-0.5, -0.9], color='blue', linewidth=4, label='Magnetic South')
+    
+    # 3. 우주 공간으로 이쁘게 늘어지는 다이폴(Dipole) 자기력선 수식 적용
+    # r = R0 * sin^2(theta) 공식을 사용하여 완벽한 루프 궤적 계산
+    # 수치연산 강도를 스케일에 부드럽게 매핑하되, 선이 지구 안으로 숨지 않도록 최소 크기(0.8) 안전 보장
+    raw_scale = np.mean(np.abs(bp_intensity))
+    scale = 0.8 + np.clip(raw_scale * 0.8, 0.0, 1.5)
+    
+    # 12개의 경도 방향으로 일정하게 방사형 배치
+    longitudes = np.linspace(0, 2 * np.pi, 12, endpoint=False)
+    # 루프 고리들의 크기 단계 설정
+    loop_sizes = [0.8, 1.3, 1.9, 2.6]
+    
+    for lon in longitudes:
+        for r_max_base in loop_sizes:
+            r_max = r_max_base * scale
             
-    ax.set_xlim(-2, 2); ax.set_ylim(-2, 2); ax.set_zlim(-2, 2)
-    ax.set_axis_off()
-    ax.view_init(elev=20, azim=30)
-    return fig
-
-
-# 개별 메커니즘 2D 변형 벡터장 렌더링 헬퍼 함수
-def render_mechanism_plot(mech_name, distortion):
-    fig, ax = plt.subplots(figsize=(6, 4.5))
-    mx = np.linspace(-2, 2, 30)
-    my = np.linspace(-2, 2, 30)
-    MX, MY = np.meshgrid(mx, my)
-    MR = np.sqrt(MX**2 + MY**2)
-    
-    # 가상 외핵 바운더리
-    core_circle = plt.Circle((0, 0), 1.0, color='darkgray', fill=False, linestyle='--', linewidth=1.5)
-    ax.add_patch(core_circle)
-    
-    if "오메가" in mech_name:
-        Bx = -MY * np.exp(-MR**2) * distortion
-        By = 1.0 + MX * np.exp(-MR**2) * distortion
-        ax.streamplot(MX, MY, Bx, By, color='darkorange', density=1.1, linewidth=1.1)
-        ax.set_title("Ω-Effect: Differential rotation wrapping lines")
-    else:
-        twist = np.exp(-(MX**2 + MY**2) / 0.5)
-        Bx = 1.0 - MY * twist * distortion
-        By = MX * twist * distortion
-        ax.streamplot(MX, MY, Bx, By, color='dodgerblue', density=1.1, linewidth=1.1)
-        ax.set_title("α-Effect: Helical eddies twisting lines")
-        
-    ax.set_xlim(-2, 2); ax.set_ylim(-2, 2)
-    ax.set_aspect('equal')
-    ax.grid(True, linestyle=':', alpha=0.5)
-    return fig
-
-
-# ==========================================
-# 7. 고속 프레임 재생 애니메이션 루프
-# ==========================================
-if st.session_state.running:
-    # 실시간 프레임 드롭을 줄이기 위해 컨텍스트 분리
-    while st.session_state.running and st.session_state.step < 1000:
-        # 데이터 업데이트
-        st.session_state.Bp, st.session_state.Bt = compute_next_step(
-            st.session_state.Bp, st.session_state.Bt,
-            alpha_coeff, omega_coeff, eta, dt
-        )
-        st.session_state.step += 1
-        
-        # 1) 폴로이달 필드 그리기
-        fig_p, ax_p = plt.subplots(figsize=(6, 4.5))
-        contour_p = ax_p.contourf(st.session_state.X, st.session_state.Y, st.session_state.Bp, cmap="RdBu_r", levels=25, vmin=-2, vmax=2)
-        fig_p.colorbar(contour_p, ax=ax_p)
-        ax_p.set_title(f"Poloidal Intensity | Step: {st.session_state.step}")
-        graph_p.pyplot(fig_p)
-        
-        # 2) 토로이달 필드 그리기
-        fig_t, ax_t = plt.subplots(figsize=(6, 4.5))
-        contour_t = ax_t.contourf(st.session_state.X, st.session_state.Y, st.session_state.Bt, cmap="viridis", levels=25, vmin=-4, vmax=4)
-        fig_t.colorbar(contour_t, ax=ax_t)
-        ax_t.set_title(f"Toroidal Distortion | Step: {st.session_state.step}")
-        graph_t.pyplot(fig_t)
-        
-        # 3D 지구장과 메커니즘 그래프 독립 할당 및 밀어넣기
-        fig_3d = render_3d_magnetic_field(st.session_state.Bp)
-        graph_3d.pyplot(fig_3d)
-        
-        fig_mech = render_mechanism_plot(mech_choice, distortion_val)
-        graph_mech.pyplot(fig_mech)
-        
-        # 화면 출력이 보장된 직후 안전하게 모든 백그라운드 캔버스 개별 초기화
-        plt.close(fig_p)
-        plt.close(fig_t)
-        plt.close(fig_3d)
-        plt.close(fig_mech)
-        
-        status_box.info(f"🧬 다이나모 상호 순환 연산 진행 중... (Step: {st.session_state.step})")
-        
-        # Streamlit 프레임 렌더링 동기화를 위한 찰나의 대기시간
-        time.sleep(0.01)
-else:
-    # 정지 상태이거나 초기에 정적 화면 고정
-    fig_p, ax_p = plt.subplots(figsize=(6, 4.5))
-    contour_p = ax_p.contourf(st.session_state.X, st.session_state.Y, st.session_state.Bp, cmap="RdBu_r", levels=25, vmin=-2, vmax=2)
-    fig_p.colorbar(contour_p, ax=ax_p)
-    ax_p.set_title("Poloidal Field - Standing State")
-    graph_p.pyplot(fig_p)
-    
-    fig_t, ax_t = plt.subplots(figsize=(6, 4.5))
-    contour_t = ax_t.contourf
+            # 지구 내부 통과 시점을 피하기 위한 각도 제한 연산
+            # sin^2(theta) * r_max > 0.5 (지구본 밖으로 나오는 구간만 그리기)
+            min_val = np.clip(0.5 / r_max, 0, 1)
+            theta_min = np.arcsin(np.sqrt(min_val))
+            
+            # 극과 극을 잇는 부드러운 각도 범위 설정
+            theta = np.linspace(theta_min, np.pi - theta_min, 40)
+            r = r_max * (np.sin(theta) ** 2)
+            
+            # 구면좌표계를 카테시안(3D 직교좌표)으로 변환
+            x_line = r * np.sin(theta) * np.cos(lon)
+            y_line = r * np.sin(theta) * np.sin(lon)
+            z_line = r * np.cos(theta)
+            
+            # 입체감 넘치고 시인성이 높은 색상(네온 화이트-하늘색 계열 혹은 붉은색) 적용
+            ax.plot(x_line, y_line, z_line, color='deepskyblue', alpha=0.5, linewidth=1.1)
+            
+            # 화살표(흐름 방향) 대용으로 중심 적도 지점에 작고 선명한 인디케이터 점 표현
+            mid = len(theta) // 2
+            ax.scatter(x_line[mid], y_line[mid], z_line[mid], color='cyan', s=6, alpha=0.8)
+            
+    # 시각화 박스 경계 설정
+    ax.set_xlim(-3
