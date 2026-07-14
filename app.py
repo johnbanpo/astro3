@@ -14,7 +14,7 @@ st.set_page_config(
 
 st.title("🌋 다이나모 이론: 지구 자기장 생성 기전 시뮬레이터")
 st.markdown("""
-지구 외핵의 **차동 회전($\Omega$ 효과)**과 **코리올리 회오리 대류($\alpha$ 효과)**의 결합에 의한 
+지구 외핵의 **차동 회전($\\Omega$ 효과)**과 **코리올리 회오리 대류($\\alpha$ 효과)**의 결합에 의한 
 자기 유도(Magnetic Induction) 현상을 수치적으로 구현한 인터랙티브 연구 모델입니다.
 """)
 st.markdown("---")
@@ -50,10 +50,18 @@ with c2:
 reset_btn = st.sidebar.button("🔄 시뮬레이션 초기화")
 
 # ==========================================
-# 3. 데이터 및 경계 조건 세션 상태 초기화
+# 3. 데이터 및 격자 동적 재초기화 대응
 # ==========================================
-if "step" not in st.session_state or reset_btn:
+# 격자 크기가 실시간으로 변하거나 초기 상태일 때 차원 불일치를 방지하기 위해 예외처리 포함
+if (
+    "step" not in st.session_state 
+    or "grid_size" not in st.session_state 
+    or st.session_state.grid_size != grid_size 
+    or reset_btn
+):
     st.session_state.step = 0
+    st.session_state.grid_size = grid_size
+    
     # 2D 좌표 평면 구축
     x = np.linspace(-2, 2, grid_size)
     y = np.linspace(-2, 2, grid_size)
@@ -61,7 +69,6 @@ if "step" not in st.session_state or reset_btn:
     
     # 초기 조건: 지구 중심 쌍극자(Dipole)를 모사하는 평면 가우시안 폴로이달 자기장
     st.session_state.Bp = np.exp(-(st.session_state.X**2 + st.session_state.Y**2))
-    # 초기 토로이달 자기장은 유도되기 전이므로 0으로 설정
     st.session_state.Bt = np.zeros_like(st.session_state.X)
     st.session_state.running = False
     if reset_btn:
@@ -96,7 +103,7 @@ def compute_next_step(Bp, Bt, alpha, omega, diffusivity, timestep):
     return np.clip(next_Bp, -5.0, 5.0), np.clip(next_Bt, -5.0, 5.0)
 
 # ==========================================
-# 5. 메인 대시보드 렌더링 영역
+# 5. 메인 대시보드 렌더링 영역 구성
 # ==========================================
 status_box = st.empty()
 col1, col2 = st.columns(2)
@@ -111,6 +118,95 @@ with col2:
     st.caption("외핵 내부에 갇혀 지구를 감싸고 도는 자기장입니다. 오메가 효과로 증폭됩니다.")
     graph_t = st.empty()
 
-
 # ==========================================
-# 6. 신규 추가:
+# 6. 3D 지구 자기력선 및 메커니즘 시각화 영역 정의
+# ==========================================
+st.markdown("---")
+st.header("🔮 3D 입체 자기력선 및 다이나모 개별 메커니즘 시각화")
+st.markdown("상단의 수치 연산 프레임과 실시간 연동되어 입체적인 변형과 보호막 크기 변화를 관찰합니다.")
+
+col3, col4 = st.columns(2)
+
+with col3:
+    st.subheader("🌍 3차원 지구 모형과 우주 자기력선 보호막")
+    st.caption("실제 나침반 자석 원리에 기반한 대칭형 3D 자기력선 궤적입니다. 연산 강도에 따라 크기가 호흡하듯 변화합니다.")
+    graph_3d = st.empty()
+
+with col4:
+    st.subheader("🌪️ α 효과 & Ω 효과 독립 메커니즘")
+    st.caption("슬라이더를 통해 외핵 내부의 개별 유체 변형 왜곡 상태를 직관적으로 관찰합니다.")
+    mech_choice = st.selectbox("관찰할 물리 현상 선택", ["오메가 효과 (Ω-Effect): 차동 회전에 의한 자기선 감김", "알파 효과 (α-Effect): 코리올리 소용돌이에 의한 자기선 꼬임"])
+    distortion_val = st.slider("물리적 변형 왜곡도", 0.0, 4.0, 2.0, 0.2)
+    graph_mech = st.empty()
+
+
+# 💡 [버그 수정 완료] 지구 자기력선 형태 3D 렌더링 함수
+def render_3d_magnetic_field(bp_intensity):
+    fig = plt.figure(figsize=(6, 5.5))
+    ax = fig.add_subplot(111, projection='3d')
+    
+    # 1. 3D 지구본 디자인 (반경 0.5로 제어, 투명하게 설정하여 내부 코어 시인성 확보)
+    u = np.linspace(0, 2 * np.pi, 25)
+    v = np.linspace(0, np.pi, 25)
+    x_earth = 0.5 * np.outer(np.cos(u), np.sin(v))
+    y_earth = 0.5 * np.outer(np.sin(u), np.sin(v))
+    z_earth = 0.5 * np.outer(np.ones(np.size(u)), np.cos(v))
+    ax.plot_surface(x_earth, y_earth, z_earth, color='dodgerblue', alpha=0.35, edgecolor='w', linewidth=0.1)
+    
+    # 2. 지구 내부의 자석 축 막대기 표현 (N극: 빨강 / S극: 파랑)
+    ax.plot([0, 0], [0, 0], [0.5, 0.9], color='red', linewidth=4, label='Magnetic North')
+    ax.plot([0, 0], [0, 0], [-0.5, -0.9], color='blue', linewidth=4, label='Magnetic South')
+    
+    # 3. 다이폴(Dipole) 수식을 활용한 공간 자기력선 구현
+    raw_scale = np.mean(np.abs(bp_intensity))
+    scale = 0.8 + np.clip(raw_scale * 0.8, 0.0, 1.5)
+    
+    longitudes = np.linspace(0, 2 * np.pi, 12, endpoint=False)
+    loop_sizes = [0.8, 1.3, 1.9, 2.6]
+    
+    for lon in longitudes:
+        for r_max_base in loop_sizes:
+            r_max = r_max_base * scale
+            
+            # 지구 표면(0.5) 밖으로 나오는 구간만 그리기 위해 각도 한계 필터링
+            min_val = np.clip(0.5 / r_max, 0, 1)
+            theta_min = np.arcsin(np.sqrt(min_val))
+            
+            theta = np.linspace(theta_min, np.pi - theta_min, 40)
+            r = r_max * (np.sin(theta) ** 2)
+            
+            x_line = r * np.sin(theta) * np.cos(lon)
+            y_line = r * np.sin(theta) * np.sin(lon)
+            z_line = r * np.cos(theta)
+            
+            # 아름다운 우주 방사선 보호막 색상으로 루프 드로잉
+            ax.plot(x_line, y_line, z_line, color='deepskyblue', alpha=0.5, linewidth=1.1)
+            
+            # 자기력선의 방향성을 보여주기 위한 적도 근방의 Cyan 포인트 인디케이터
+            mid = len(theta) // 2
+            ax.scatter(x_line[mid], y_line[mid], z_line[mid], color='cyan', s=6, alpha=0.8)
+            
+    # 시각화 박스 영역 제한 및 뷰 각도 최적화
+    ax.set_xlim(-3, 3)
+    ax.set_ylim(-3, 3)
+    ax.set_zlim(-3, 3)
+    ax.set_axis_off()  # 깔끔한 렌더링을 위해 격자축 제거
+    ax.view_init(elev=15, azim=45)
+    return fig
+
+
+# 개별 메커니즘 2D 변형 벡터장 렌더링 헬퍼 함수
+def render_mechanism_plot(mech_name, distortion):
+    fig, ax = plt.subplots(figsize=(6, 4.5))
+    mx = np.linspace(-2, 2, 30)
+    my = np.linspace(-2, 2, 30)
+    MX, MY = np.meshgrid(mx, my)
+    MR = np.sqrt(MX**2 + MY**2)
+    
+    # 가상 외핵 바운더리
+    core_circle = plt.Circle((0, 0), 1.0, color='darkgray', fill=False, linestyle='--', linewidth=1.5)
+    ax.add_patch(core_circle)
+    
+    if "오메가" in mech_name:
+        Bx = -MY * np.exp(-MR**2) * distortion
+        By = 1.0 + MX * np
