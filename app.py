@@ -102,37 +102,4 @@ status_box = st.empty()
 col1, col2 = st.columns(2)
 
 with col1:
-    st.subheader("🌐 주 자기장: 폴로이달 성분 (Poloidal Field - Bp)")
-    st.caption("남북 방향으로 형성되는 겉보기 자기장입니다. 알파 효과로 유지됩니다.")
-    graph_p = st.empty()
-
-with col2:
-    st.subheader("🌀 내부 자기장: 토로이달 성분 (Toroidal Field - Bt)")
-    st.caption("외핵 내부에 갇혀 지구를 감싸고 도는 자기장입니다. 오메가 효과로 증폭됩니다.")
-    graph_t = st.empty()
-
-
-# ==========================================
-# ➕ 신규 추가 1: 3D 지구 자기력선 및 메커니즘 렌더링 영역 정의
-# ==========================================
-st.markdown("---")
-st.header("🔮 [신규 기능] 3D 입체 자기력선 및 다이나모 개별 메커니즘 시각화")
-st.markdown("상단의 수치 연산 프레임과 실시간 연동되거나, 개별 물리 법칙을 독립적으로 학습할 수 있는 공간입니다.")
-
-col3, col4 = st.columns(2)
-
-with col3:
-    st.subheader("🌍 3차원 지구 모형과 공간 자기력선")
-    st.caption("현재 폴로이달 자기장($B_p$)의 평균 강도를 반영하여 외부로 뿜어져 나오는 3D 자기력선을 시각화합니다.")
-    graph_3d = st.empty()
-
-with col4:
-    st.subheader("🌪️ α 효과 & Ω 효과 독립 메커니즘")
-    st.caption("슬라이더를 통해 외핵 내부의 개별 유체 변형 왜곡 상태를 직관적으로 관찰합니다.")
-    mech_choice = st.selectbox("관찰할 물리 현상 선택", ["오메가 효과 (Ω-Effect): 차동 회전에 의한 자기선 감김", "알파 효과 (α-Effect): 코리올리 소용돌이에 의한 자기선 꼬임"])
-    distortion_val = st.slider("물리적 변형 왜곡도", 0.0, 4.0, 2.0, 0.2)
-    graph_mech = st.empty()
-
-
-# 3D 자기력선 렌더링 헬퍼 함수
-def render_
+    st.subheader("🌐 주 자기장: 폴로이달 성분 (Poloidal
